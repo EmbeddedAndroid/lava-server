@@ -549,10 +549,12 @@ class MetaType(models.Model):
         elif section_type == MetaType.BOOT_TYPE:
             return 'method'
         elif section_type == MetaType.TEST_TYPE:
-            if name == 'lava-test-monitor':
+            if 'lava-test-monitor' in name:
                 return 'monitors'
-            else:
+            elif 'lava-test-shell' in name:
                 return 'definitions'
+            else:
+                return None
         else:
             return None
 

@@ -1,0 +1,15 @@
+{% extends 'base-uboot.jinja2' %}
+
+{% set console_device = console_device|default('ttymxc3') %}
+{% set baud_rate = baud_rate|default(115200) %}
+{% set device_type = "imx6q-cm-fx6" %}
+{% set bootloader_prompt = bootloader_prompt|default('CM-FX6') %}
+{% set bootm_kernel_addr = '0x10800000' %}
+{% set bootm_ramdisk_addr = '0x12800000' %}
+{% set bootm_dtb_addr = '0x15000000' %}
+{% set bootz_kernel_addr = '0x10800000' %}
+{% set bootz_ramdisk_addr = '0x12800000' %}
+{% set bootz_dtb_addr = '0x15000000' %}
+{% set usb_uuid = usb_uuid|default('') %}
+{% set usb_device_id = usb_device_id|default('') %}
+{% set uboot_mkimage_arch = 'arm' %}

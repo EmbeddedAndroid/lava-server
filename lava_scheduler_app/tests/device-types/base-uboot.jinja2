@@ -74,7 +74,7 @@
     ramdisk: '{{ bootz_ramdisk_addr|default('0x82000000') }}'
     dtb: '{{ bootz_dtb_addr|default('0x81000000') }}'
 {% endif %}
-{%- if sata_uuid or sd_uuid or usb_uuid %}
+{%- if sata_uuid or sd_uuid or usb_uuid or emmc_uuid %}
   media:
 {% if sata_uuid %}
     sata:
@@ -86,7 +86,7 @@
 {% endif %}
 {% if sd_uuid %}
     sd:
-      {{ sd_label }}:
+      {{ sd_label|default('mmc') }}:
         uuid: {{ sd_uuid }}
         device_id: {{ sd_device_id }}  # the bootloader device id for this media on the 'sd' interface
 {% endif %}
@@ -95,6 +95,12 @@
       {{ usb_label|default('SanDisk_Ultra') }}:
         uuid: {{ usb_uuid }}  # /dev/disk/by-id/
         device_id: {{ usb_device_id }}  # the bootloader device id for this media on the 'usb' interface
+{% endif %}
+{% if emmc_uuid %}
+    usb:
+      {{ emmc_label|default('emmc') }}:
+        uuid: {{ emmc_uuid }}  # /dev/disk/by-id/
+        device_id: {{ emmc_device_id }}  # the bootloader device id for this media on the 'usb' interface
 {% endif %}
 {%- endif %}
 {% endblock %}
@@ -176,16 +182,6 @@ actions:
 {{ base_uboot_tftp_commands }}
           - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root=/dev/ram0 {{ base_kernel_args }} {{ base_ip_args }}'"
 {{ base_uboot_tftp_bootcmd }}
-        usb:
-          commands:
-{{ base_uboot_usb_commands }}
-{{ base_uboot_commands }}
-{{ base_uboot_addr_commands }}
-          - "setenv loadkernel 'load usb {{ usb_device_id }}:{ROOT_PART} {KERNEL_ADDR} {KERNEL}'"
-          - "setenv loadinitrd 'load usb {{ usb_device_id }}:{ROOT_PART} {RAMDISK_ADDR} {RAMDISK}; setenv initrd_size ${filesize}'"
-          - "setenv loadfdt 'load usb {{ usb_device_id }}:{ROOT_PART} {DTB_ADDR} {DTB}'"
-          - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root={ROOT} {{ base_kernel_args }} {{ base_ip_args }}'"
-{{ base_uboot_bootcmd }}
         sata:
           commands:
           - scsi scan
@@ -193,6 +189,36 @@ actions:
           - "setenv loadkernel 'load scsi {ROOT_PART} {KERNEL_ADDR} {KERNEL}'"
           - "setenv loadinitrd 'load scsi {ROOT_PART} {RAMDISK_ADDR} {RAMDISK}; setenv initrd_size ${filesize}'"
           - "setenv loadfdt 'load scsi {ROOT_PART} {DTB_ADDR} {DTB}'"
+          - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root={ROOT} {{ base_kernel_args }} {{ base_ip_args }}'"
+{{ base_uboot_bootcmd }}
+        sd:
+          commands:
+          - mmc rescan
+          - mmc info
+{{ base_uboot_commands }}
+          - "setenv loadkernel 'load mmc {ROOT_PART} {KERNEL_ADDR} {KERNEL}'"
+          - "setenv loadinitrd 'load mmc {ROOT_PART} {RAMDISK_ADDR} {RAMDISK}; setenv initrd_size ${filesize}'"
+          - "setenv loadfdt 'load mmc {ROOT_PART} {DTB_ADDR} {DTB}'"
+          - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root={ROOT} {{ base_kernel_args }} {{ base_ip_args }}'"
+{{ base_uboot_bootcmd }}
+        usb:
+          commands:
+{{ base_uboot_usb_commands }}
+{{ base_uboot_commands }}
+{{ base_uboot_addr_commands }}
+          - "setenv loadkernel 'load usb {ROOT_PART} {KERNEL_ADDR} {KERNEL}'"
+          - "setenv loadinitrd 'load usb {ROOT_PART} {RAMDISK_ADDR} {RAMDISK}; setenv initrd_size ${filesize}'"
+          - "setenv loadfdt 'load usb {ROOT_PART} {DTB_ADDR} {DTB}'"
+          - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root={ROOT} {{ base_kernel_args }} {{ base_ip_args }}'"
+{{ base_uboot_bootcmd }}
+        emmc:
+          commands:
+          - mmc rescan
+          - mmc info
+{{ base_uboot_commands }}
+          - "setenv loadkernel 'load mmc {ROOT_PART} {KERNEL_ADDR} {KERNEL}'"
+          - "setenv loadinitrd 'load mmc {ROOT_PART} {RAMDISK_ADDR} {RAMDISK}; setenv initrd_size ${filesize}'"
+          - "setenv loadfdt 'load mmc {ROOT_PART} {DTB_ADDR} {DTB}'"
           - "setenv bootargs 'console={{ console_device }},{{ baud_rate }}n8 root={ROOT} {{ base_kernel_args }} {{ base_ip_args }}'"
 {{ base_uboot_bootcmd }}
 {% endblock %}

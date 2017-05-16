@@ -54,7 +54,8 @@ def _auto_login_schema():
         Required('login_prompt'): str,
         Required('username'): str,
         Optional('password_prompt'): str,
-        Optional('password'): str
+        Optional('password'): str,
+        Optional('login_commands'): list,
     })
 
 

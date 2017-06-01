@@ -2561,6 +2561,21 @@ class TestJob(RestrictedResource):
         return parent.actual_device.worker_host
 
     @property
+    def get_parent_job(self):
+        if not self.is_multinode:
+            return None
+        try:
+            data = yaml.load(self.definition)
+        except yaml.YAMLError:
+            return None
+        if 'host_role' not in data:
+            return None
+
+        for job in self.sub_jobs_list:
+            if job.device_role == data['host_role']:
+                return job
+
+    @property
     def is_vmgroup(self):
         if self.is_pipeline:
             return False

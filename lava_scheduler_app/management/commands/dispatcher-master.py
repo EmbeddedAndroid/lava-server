@@ -431,55 +431,37 @@ class Command(BaseCommand):
         for job in TestJob.objects.filter(
                 Q(status=TestJob.SUBMITTED) & Q(is_pipeline=True) & ~Q(actual_device=None))\
                 .order_by('-health_check', '-priority', 'submit_time', 'target_group', 'id'):
-            if job.dynamic_connection:
-                # A secondary connection must be made from a dispatcher local to the host device
-                # to allow for local firewalls etc. So the secondary connection is started on the
-                # remote worker of the "nominated" host.
-                # FIXME:
-                device = None
-                worker_host = job.lookup_worker
-                self.logger.info("[%d] START => %s (connection)", job.id,
-                                 worker_host.hostname)
-            else:
-                device = select_device(job, self.dispatchers)
-                if not device:
+
+            device = select_device(job, self.dispatchers)
+            if not device:
+                continue
+            # selecting device can change the job
+            job = TestJob.objects.get(id=job.id)
+            self.logger.info("[%d] Assigning %s device", job.id, device)
+            if job.actual_device is None:
+                device = job.requested_device
+                if not device.worker_host:
+                    msg = "Infrastructure error: Invalid worker information"
+                    self.logger.error("[%d] %s", job.id, msg)
+                    fail_job(job, msg, TestJob.INCOMPLETE)
                     continue
-                # selecting device can change the job
-                job = TestJob.objects.get(id=job.id)
-                self.logger.info("[%d] Assigning %s device", job.id, device)
-                if job.actual_device is None:
-                    device = job.requested_device
-                    if not device.worker_host:
-                        msg = "Infrastructure error: Invalid worker information"
-                        self.logger.error("[%d] %s", job.id, msg)
-                        fail_job(job, msg, TestJob.INCOMPLETE)
-                        continue
 
-                    # Launch the job
-                    create_job(job, device)
-                    self.logger.info("[%d] START => %s (%s)", job.id,
-                                     device.worker_host.hostname, device.hostname)
-                    worker_host = device.worker_host
-                else:
-                    device = job.actual_device
-                    if not device.worker_host:
-                        msg = "Infrastructure error: Invalid worker information"
-                        self.logger.error("[%d] %s", job.id, msg)
-                        fail_job(job, msg, TestJob.INCOMPLETE)
-                        continue
-                    self.logger.info("[%d] START => %s (%s) (retrying)", job.id,
-                                     device.worker_host.hostname, device.hostname)
-                    worker_host = device.worker_host
+                # Launch the job
+                create_job(job, device)
+                self.logger.info("[%d] START => %s (%s)", job.id,
+                                 device.worker_host.hostname, device.hostname)
+                worker_host = device.worker_host
+            else:
+                device = job.actual_device
+                if not device.worker_host:
+                    msg = "Infrastructure error: Invalid worker information"
+                    self.logger.error("[%d] %s", job.id, msg)
+                    fail_job(job, msg, TestJob.INCOMPLETE)
+                    continue
+                self.logger.info("[%d] START => %s (%s) (retrying)", job.id,
+                                 device.worker_host.hostname, device.hostname)
+                worker_host = device.worker_host
             try:
-                # Load job definition to get the variables for template
-                # rendering
-                job_def = yaml.load(job.definition)
-                job_ctx = job_def.get('context', {})
-
-                # Load device configuration
-                device_configuration = '' \
-                    if job.dynamic_connection else device.load_device_configuration(job_ctx)
-
                 # Load env.yaml, env-dut.yaml and dispatcher configuration
                 # All three are optional
                 env_str = load_optional_yaml_file(options['env'])
@@ -494,13 +476,33 @@ class Command(BaseCommand):
                             # to get this far, the rest of the multinode group must also be ready
                             # so start the dynamic connections
                             # FIXME: rationalise and streamline
+                            dynamic_connection_worker_host = group_job.lookup_worker
+                            self.logger.info("[%d] START => %s (connection)", group_job.id,
+                                              dynamic_connection_worker_host.hostname)
+                            parent_job = group_job.get_parent_job
+                            if parent_job.actual_device is None:
+                                parent_device = parent_job.requested_device
+                            else:
+                                parent_device = parent_job.actual_device
+
+                            job_def = yaml.load(parent_job.definition)
+                            job_ctx = job_def.get('context', {})
+                            device_configuration = parent_device.load_device_configuration(job_ctx)
                             self.controler.send_multipart(
-                                [str(worker_host.hostname),
+                                [str(dynamic_connection_worker_host.hostname),
                                  'START', str(group_job.id),
                                  self.export_definition(group_job),
                                  str(device_configuration),
                                  dispatcher_config,
                                  env_str, env_dut_str])
+
+                                # Load job definition to get the variables for template
+                # rendering
+                job_def = yaml.load(job.definition)
+                job_ctx = job_def.get('context', {})
+
+                # Load device configuration
+                device_configuration = device.load_device_configuration(job_ctx)
 
                 self.controler.send_multipart(
                     [str(worker_host.hostname),

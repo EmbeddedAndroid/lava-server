@@ -33,6 +33,7 @@ import yaml
 import zmq
 import zmq.auth
 from zmq.auth.thread import ThreadAuthenticator
+from threading import Thread
 
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -196,84 +197,108 @@ class Command(BaseCommand):
         self.dispatchers[hostname].alive()
 
     def logging_socket(self, options):
-        msg = self.pull_socket.recv_multipart()
-        try:
-            (job_id, level, name, message) = msg  # pylint: disable=unbalanced-tuple-unpacking
-        except ValueError:
-            # do not let a bad message stop the master.
-            self.logger.error("Failed to parse log message, skipping: %s", msg)
-            return
+        self.logger.info("[POLL] Starting logging thread")
+        self.pull_socket = self.context.socket(zmq.PULL)
+        if options['encrypt']:
+            self.pull_socket.curve_publickey = self.master_public
+            self.pull_socket.curve_secretkey = self.master_secret
+            self.pull_socket.curve_server = True
+        self.pull_socket.bind(options['log_socket'])
+        jobs = {}
+        while self.run_threads:
+            try:
+                # We need here to use the zmq.NOBLOCK flag, otherwise the thread
+                # could be blocked waiting for a message.
+                # Trying to stop the dispatcher-master when the pull_socket is
+                # empty would then result in this thread to be improperly stopped
+                # because it would just never see that the run_threads flag had
+                # changed.
+                msg = self.pull_socket.recv_multipart(zmq.NOBLOCK)
+            except zmq.error.Again:
+                msg = None
+            if msg is None:
+                time.sleep(2) # Don't eat too much CPU
+                continue
+            try:
+                (job_id, level, name, message) = msg  # pylint: disable=unbalanced-tuple-unpacking
+            except ValueError:
+                # do not let a bad message stop the master.
+                self.logger.error("Failed to parse log message, skipping: %s", msg)
+                continue
 
-        try:
-            scanned = yaml.load(message, Loader=yaml.CLoader)
-        except yaml.YAMLError:
-            self.logger.error("[%s] data are not valid YAML, dropping", job_id)
-            return
+            try:
+                scanned = yaml.load(message, Loader=yaml.CLoader)
+            except yaml.YAMLError:
+                self.logger.error("[%s] data are not valid YAML, dropping", job_id)
+                continue
 
-        # Look for "results" level
-        try:
-            message_lvl = scanned["lvl"]
-            message_msg = scanned["msg"]
-        except KeyError:
-            self.logger.error(
-                "[%s] Invalid log line, missing \"lvl\" or \"msg\" keys: %s",
-                job_id, message)
-            return
+            # Look for "results" level
+            try:
+                message_lvl = scanned["lvl"]
+                message_msg = scanned["msg"]
+            except KeyError:
+                self.logger.error(
+                    "[%s] Invalid log line, missing \"lvl\" or \"msg\" keys: %s",
+                    job_id, message)
+                continue
 
-        # Clear filename
-        if '/' in level or '/' in name:
-            self.logger.error("[%s] Wrong level or name received, dropping the message", job_id)
-            return
+            # Clear filename
+            if '/' in level or '/' in name:
+                self.logger.error("[%s] Wrong level or name received, dropping the message", job_id)
+                continue
 
-        # Find the handler (if available)
-        if job_id in self.jobs:
-            if level != self.jobs[job_id].current_level:
-                # Close the old file handler
-                self.jobs[job_id].sub_log.close()
-                filename = os.path.join(self.jobs[job_id].output_dir,
+            # Find the handler (if available)
+            if job_id in jobs:
+                if level != jobs[job_id].current_level:
+                    # Close the old file handler
+                    jobs[job_id].sub_log.close()
+                    filename = os.path.join(jobs[job_id].output_dir,
+                                            "pipeline", level.split('.')[0],
+                                            "%s-%s.yaml" % (level, name))
+                    mkdir(os.path.dirname(filename))
+                    self.current_level = level
+                    jobs[job_id].sub_log = open(filename, 'a+')
+            else:
+                # Query the database for the job
+                try:
+                    job = TestJob.objects.get(id=job_id)
+                except TestJob.DoesNotExist:
+                    self.logger.error("[%s] Unknown job id", job_id)
+                    continue
+
+                self.logger.info("[%s] Receiving logs from a new job", job_id)
+                filename = os.path.join(job.output_dir,
                                         "pipeline", level.split('.')[0],
                                         "%s-%s.yaml" % (level, name))
+                # Create the sub directories (if needed)
                 mkdir(os.path.dirname(filename))
-                self.current_level = level
-                self.jobs[job_id].sub_log = open(filename, 'a+')
-        else:
-            # Query the database for the job
-            try:
-                job = TestJob.objects.get(id=job_id)
-            except TestJob.DoesNotExist:
-                self.logger.error("[%s] Unknown job id", job_id)
-                return
+                jobs[job_id] = JobHandler(job, level, filename)
 
-            self.logger.info("[%s] Receiving logs from a new job", job_id)
-            filename = os.path.join(job.output_dir,
-                                    "pipeline", level.split('.')[0],
-                                    "%s-%s.yaml" % (level, name))
-            # Create the sub directories (if needed)
-            mkdir(os.path.dirname(filename))
-            self.jobs[job_id] = JobHandler(job, level, filename)
+            if message_lvl == "results":
+                try:
+                    job = TestJob.objects.get(pk=job_id)
+                except TestJob.DoesNotExist:
+                    self.logger.error("[%s] Unknown job id", job_id)
+                    continue
+                meta_filename = create_metadata_store(message_msg, job, level)
+                ret = map_scanned_results(results=message_msg, job=job, meta_filename=meta_filename)
+                if not ret:
+                    self.logger.warning(
+                        "[%s] Unable to map scanned results: %s",
+                        job_id, message)
 
-        if message_lvl == "results":
-            try:
-                job = TestJob.objects.get(pk=job_id)
-            except TestJob.DoesNotExist:
-                self.logger.error("[%s] Unknown job id", job_id)
-                return
-            meta_filename = create_metadata_store(message_msg, job, level)
-            ret = map_scanned_results(results=message_msg, job=job, meta_filename=meta_filename)
-            if not ret:
-                self.logger.warning(
-                    "[%s] Unable to map scanned results: %s",
-                    job_id, message)
+            # Mark the file handler as used
+            jobs[job_id].last_usage = time.time()
 
-        # Mark the file handler as used
-        self.jobs[job_id].last_usage = time.time()
+            # n.b. logging here would produce a log entry for every message in every job.
+            # The format is a list of dictionaries
+            message = "- %s" % message
 
-        # n.b. logging here would produce a log entry for every message in every job.
-        # The format is a list of dictionaries
-        message = "- %s" % message
-
-        # Write data
-        self.jobs[job_id].write(message)
+            # Write data
+            jobs[job_id].write(message)
+        self.logger.info("[CLOSE] Closing the logging socket and dropping messages")
+        self.pull_socket.close(linger=0)
+        self.logger.info("[POLL] Terminating logging thread")
 
     def controler_socket(self):
         msg = self.controler.recv_multipart()
@@ -574,31 +599,26 @@ class Command(BaseCommand):
 
         auth = None
         # Create the sockets
-        context = zmq.Context()
-        self.pull_socket = context.socket(zmq.PULL)
-        self.controler = context.socket(zmq.ROUTER)
+        self.context = zmq.Context()
+        self.controler = self.context.socket(zmq.ROUTER)
 
         if options['encrypt']:
             self.logger.info("Starting encryption")
             try:
-                auth = ThreadAuthenticator(context)
+                auth = ThreadAuthenticator(self.context)
                 auth.start()
                 self.logger.debug("Opening master certificate: %s", options['master_cert'])
-                master_public, master_secret = zmq.auth.load_certificate(options['master_cert'])
+                self.master_public, self.master_secret = zmq.auth.load_certificate(options['master_cert'])
                 self.logger.debug("Using slaves certificates from: %s", options['slaves_certs'])
                 auth.configure_curve(domain='*', location=options['slaves_certs'])
             except IOError as err:
                 self.logger.error(err)
                 auth.stop()
                 return
-            self.controler.curve_publickey = master_public
-            self.controler.curve_secretkey = master_secret
+            self.controler.curve_publickey = self.master_public
+            self.controler.curve_secretkey = self.master_secret
             self.controler.curve_server = True
-            self.pull_socket.curve_publickey = master_public
-            self.pull_socket.curve_secretkey = master_secret
-            self.pull_socket.curve_server = True
 
-        self.pull_socket.bind(options['log_socket'])
         self.controler.bind(options['master_socket'])
 
         # Last access to the database for new jobs and cancelations
@@ -607,7 +627,6 @@ class Command(BaseCommand):
         # Poll on the sockets (only one for the moment). This allow to have a
         # nice timeout along with polling.
         poller = zmq.Poller()
-        poller.register(self.pull_socket, zmq.POLLIN)
         poller.register(self.controler, zmq.POLLIN)
 
         # Mask signals and create a pipe that will receive a bit for each
@@ -630,12 +649,17 @@ class Command(BaseCommand):
         if os.path.exists('/etc/lava-server/worker.conf'):
             self.logger.error("[FAIL] lava-master must not be run on a remote worker!")
             self.controler.close(linger=0)
-            self.pull_socket.close(linger=0)
-            context.term()
+            self.context.term()
             sys.exit(2)
 
         self.logger.info("[INIT] LAVA dispatcher-master has started.")
         self.logger.info("[INIT] Using protocol version %d", PROTOCOL_VERSION)
+
+        self.run_threads = True
+
+        # Logging socket
+        logging_thread = Thread(target=self.logging_socket, args=(options, ))
+        logging_thread.start()
 
         while True:
             try:
@@ -654,10 +678,6 @@ class Command(BaseCommand):
                     else:
                         self.logger.info("[POLL] Received a signal, leaving")
                         break
-
-                # Logging socket
-                if sockets.get(self.pull_socket) == zmq.POLLIN:
-                    self.logging_socket(options)
 
                 # Garbage collect file handlers
                 now = time.time()
@@ -699,7 +719,8 @@ class Command(BaseCommand):
         # Closing sockets and droping messages.
         self.logger.info("[CLOSE] Closing the sockets and dropping messages")
         self.controler.close(linger=0)
-        self.pull_socket.close(linger=0)
+        self.run_threads = False
+        logging_thread.join()
         if options['encrypt']:
             auth.stop()
-        context.term()
+        self.context.term()

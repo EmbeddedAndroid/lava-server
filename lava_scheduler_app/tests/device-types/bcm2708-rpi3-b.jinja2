@@ -1,0 +1,18 @@
+{% extends 'base-uboot.jinja2' %}
+{% set device_type = "bcm2708-rpi3-b" %}
+{% set console_device = console_device|default('ttyS0') %}
+{% set baud_rate = baud_rate|default(115200) %}
+{% set booti_kernel_addr = '0x01000000' %}
+{% set booti_ramdisk_addr = '0x04000000' %}
+{% set booti_dtb_addr = '0x00000100' %}
+{% set bootm_kernel_addr = '0x01000000' %}
+{% set bootm_ramdisk_addr = '0x04000000' %}
+{% set bootm_dtb_addr = '0x2effb600' %}
+{% set bootz_kernel_addr = '0x01000000' %}
+{% set bootz_ramdisk_addr = '0x04000000' %}
+{% set bootz_dtb_addr = '0x2effb600' %}
+{% set usb_uuid = usb_uuid|default('') %}
+{% set usb_device_id = usb_device_id|default('') %}
+{% set uboot_mkimage_arch = 'arm64' %}
+{% set bootloader_prompt = bootloader_prompt|default('U-Boot>') %}
+{% set extra_kernel_args = "8250.nr_uarts=1 bcm2708_fb.fbwidth=656 bcm2708_fb.fbheight=416 bcm2708_fb.fbswap=1 vc_mem.mem_base=0x3ec00000 vc_mem.mem_size=0x40000000  dwc_otg.lpm_enable=0" %}

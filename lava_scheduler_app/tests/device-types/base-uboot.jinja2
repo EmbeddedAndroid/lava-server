@@ -3,6 +3,9 @@
 {% set base_high_limits = base_high_limits|default(true) %}
 {% set base_uboot_commands = (
 "          - setenv autoload no") -%}
+{% set base_uboot_usb_ether_commands = (
+"          - setenv ethact usb_ether
+          - usb start") -%}
 {% set base_uboot_high_limits =(
 "          - setenv initrd_high " + uboot_initrd_high|default('0xffffffff') + "
           - setenv fdt_high " + uboot_fdt_high|default('0xffffffff') ) -%}
@@ -28,6 +31,7 @@
 "          - usb start") -%}
 
 {% set uboot_needs_usb = uboot_needs_usb|default(false) %}
+{% set uboot_needs_usb_ether = uboot_needs_usb_ether|default(false) %}
 
 {% set usb_uuid = usb_uuid|default('') %}
 {% set usb_device_id = usb_device_id|default(0) %}
@@ -158,6 +162,9 @@ actions:
 {{ base_uboot_usb_commands }}
 {% endif -%}
 {{ base_uboot_commands }}
+{% if uboot_needs_usb_ether %}
+{{ base_uboot_usb_ether_commands }}
+{% endif -%}
 {% if base_high_limits %}
 {{ base_uboot_high_limits }}
 {% endif %}
@@ -175,6 +182,9 @@ actions:
 {{ base_uboot_usb_commands }}
 {% endif -%}
 {{ base_uboot_commands }}
+{% if uboot_needs_usb_ether %}
+{{ base_uboot_usb_ether_commands }}
+{% endif -%}
 {% if base_high_limits %}
 {{ base_uboot_high_limits }}
 {% endif %}
